@@ -9,10 +9,15 @@ import androidx.work.workDataOf
 import timber.log.Timber
 import javax.inject.Inject
 
-class RegistrationWork @Inject constructor(private val registrationUseCase: RegistrationUseCase) {
+class RegistrationWork @Inject constructor(
+    private val registrationUseCase: RegistrationUseCase,
+    private val dummyRegistrationUseCase: DummyRegistrationUseCase
+) {
 
     suspend fun doWork(): ListenableWorker.Result {
-        val result = registrationUseCase.register()
+        //val result = registrationUseCase.register()
+        // TODO make this conditional
+        val result = dummyRegistrationUseCase.register()
         Timber.tag("RegistrationUseCase").d("doWork result = $result")
 
         return when (result) {

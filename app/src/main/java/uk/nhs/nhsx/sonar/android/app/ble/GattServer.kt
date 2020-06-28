@@ -11,7 +11,6 @@ import android.bluetooth.BluetoothGattCharacteristic.PERMISSION_WRITE
 import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_NOTIFY
 import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_READ
 import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE
-import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
@@ -32,25 +31,38 @@ class GattServer @Inject constructor(
 ) {
     private val keepAliveCharacteristic = BluetoothGattCharacteristic(
         SONAR_KEEPALIVE_CHARACTERISTIC_UUID,
-        PROPERTY_READ + PROPERTY_WRITE + PROPERTY_WRITE_NO_RESPONSE + PROPERTY_NOTIFY,
-        PERMISSION_READ + PERMISSION_WRITE
+        PROPERTY_READ + PROPERTY_NOTIFY,
+        PERMISSION_READ
     ).also {
         it.addDescriptor(
             BluetoothGattDescriptor(
-                NOTIFY_DESCRIPTOR_UUID,
-                PERMISSION_READ + PERMISSION_WRITE
+                CLIENT_CHARACTERISTIC_CONFIG,
+                PERMISSION_READ + PERMISSION_WRITE // Needs write so we can subscribe
             )
         )
     }
 
     private val identityCharacteristic = BluetoothGattCharacteristic(
         SONAR_IDENTITY_CHARACTERISTIC_UUID,
-        PROPERTY_READ + PROPERTY_WRITE + PROPERTY_WRITE_NO_RESPONSE + PROPERTY_NOTIFY,
+        PROPERTY_READ ,
+        PERMISSION_READ
+    ).also {
+        it.addDescriptor(
+            BluetoothGattDescriptor(
+                CLIENT_CHARACTERISTIC_CONFIG,
+                PERMISSION_READ
+            )
+        )
+    }
+
+    private val nearbyCharacteristic = BluetoothGattCharacteristic(
+        SONAR_NEARBY_IDENTITY_CHARACTERISTIC_UUID,
+        PROPERTY_READ + PROPERTY_WRITE,
         PERMISSION_READ + PERMISSION_WRITE
     ).also {
         it.addDescriptor(
             BluetoothGattDescriptor(
-                NOTIFY_DESCRIPTOR_UUID,
+                CLIENT_CHARACTERISTIC_CONFIG,
                 PERMISSION_READ + PERMISSION_WRITE
             )
         )
@@ -61,6 +73,9 @@ class GattServer @Inject constructor(
             .also {
                 it.addCharacteristic(
                     identityCharacteristic
+                )
+                it.addCharacteristic(
+                    nearbyCharacteristic
                 )
                 it.addCharacteristic(
                     keepAliveCharacteristic
@@ -79,8 +94,24 @@ class GattServer @Inject constructor(
                 offset: Int,
                 characteristic: BluetoothGattCharacteristic
             ) {
+                Timber.d("onCharacteristicReadRequest received")
                 gattWrapper?.respondToCharacteristicRead(device, requestId, characteristic)
             }
+
+
+            override fun onCharacteristicWriteRequest(
+                device: BluetoothDevice?,
+                requestId: Int,
+                characteristic: BluetoothGattCharacteristic?,
+                preparedWrite: Boolean,
+                responseNeeded: Boolean,
+                offset: Int,
+                value: ByteArray?
+            ) {
+                Timber.d("onCharacteristicWriteRequest received")
+                gattWrapper?.respondToCharacteristicWrite(device, characteristic, offset, value, responseNeeded, requestId)
+            }
+
 
             override fun onConnectionStateChange(
                 device: BluetoothDevice?,
@@ -88,11 +119,19 @@ class GattServer @Inject constructor(
                 newState: Int
             ) {
                 super.onConnectionStateChange(device, status, newState)
+                // af-08 Additional logging
+                Timber.d("Connection state change recorded...")
+                Timber.d("Connection state change for ${device?.address} was $status now $newState")
+                Timber.d("  Connecting    : ${BluetoothProfile.STATE_CONNECTING}")
+                Timber.d("  Connected     : ${BluetoothProfile.STATE_CONNECTED}")
+                Timber.d("  Disconnecting : ${BluetoothProfile.STATE_DISCONNECTING}")
+                Timber.d("  Disconnected  : ${BluetoothProfile.STATE_DISCONNECTED}")
                 if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     gattWrapper?.deviceDisconnected(device)
                 }
             }
 
+            // AF WHY IS THIS EVER NECESSARY??? We never receive a descriptor write, but perhaps, in future, a characteristic write
             override fun onDescriptorWriteRequest(
                 device: BluetoothDevice?,
                 requestId: Int,
@@ -102,6 +141,7 @@ class GattServer @Inject constructor(
                 offset: Int,
                 value: ByteArray?
             ) {
+                Timber.d("Descriptor write received. (subscribing for notify)")
                 gattWrapper?.respondToDescriptorWrite(device, descriptor, responseNeeded, requestId)
             }
         }

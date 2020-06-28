@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.net.MacAddress
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,21 +42,79 @@ class GattWrapper(
     private val payloadIsValid: Boolean
         get() = bluetoothIdProvider.canProvideIdentifier()
 
+    // af-13 - Write characteristic support
+    private val writtenIds = HashMap<String,ByteArray>() // MacAddress String to Byte Array
+
     fun respondToCharacteristicRead(
         device: BluetoothDevice,
         requestId: Int,
         characteristic: BluetoothGattCharacteristic
     ) {
+        // af-08 Additional logging
+        Timber.d("Received characteristic read from ${device.address} for char ${characteristic.uuid}")
         if (characteristic.isKeepAlive()) {
-            server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, byteArrayOf())
+            Timber.d("Was a read of the keepalive. Returning empty success response")
+            server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, byteArrayOf(1)) // af-05 added some output for keepalive read
             return
         }
 
-        if (characteristic.isDeviceIdentifier() && payloadIsValid) {
-            server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, payload)
-        } else {
-            server?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, byteArrayOf())
+        if (characteristic.isDeviceIdentifier()) {
+            if (payloadIsValid) {
+                Timber.d("Was a read of the Bluetooth ID. Returning payload")
+                server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, payload)
+
+                return
+            } else {
+                Timber.d("Was a read of the Bluetooth ID - but we don't have a valid payload! Returning empty success")
+                // af-05 sending a success but no value so that connection isn't terminated by an 'error'
+                // The broadcast ID will be picked up again when it's next requested (every 16 seconds on iOS currently)
+                server?.sendResponse(
+                    device,
+                    requestId,
+                    BluetoothGatt.GATT_SUCCESS,
+                    0,
+                    byteArrayOf()
+                )
+                return
+            }
         }
+
+        if (characteristic.isNearbyDescriptor()) {
+            Timber.d("nearby - characteristic being read")
+            var requestorMac = device.address
+            Timber.d("nearby - Returning a list of nearby devices by their most recent data shared to $requestorMac")
+            var writtenAny = false
+            for (key in writtenIds.keys) {
+                if (!requestorMac.equals(key)) {
+                    // send a response
+                    Timber.d("nearby - Found a recent key that isn't the requestor, so sending: $key")
+                    server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, writtenIds[key])
+                    writtenAny = true
+                    break // af-13 TODO only ever send one for now - change in future
+                }
+            }
+            if (!writtenAny) {
+                Timber.d("Not seen any other nearby IDs. Sending successful blank response")
+                server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, byteArrayOf())
+            }
+
+            return
+        }
+
+        Timber.d("Unknown read for characteristic with id (not nearby): ${characteristic.uuid}")
+    }
+
+    fun respondToCharacteristicWrite(device:BluetoothDevice?, characteristic:BluetoothGattCharacteristic?, offset: Int, value: ByteArray?, responseNeeded: Boolean, requestId: Int) {
+        Timber.d("Nearby ID Write request received")
+        if (null == device || null == characteristic || null == value) {
+            return
+        }
+        // TODO don't assume it's the ID Char that is being written
+        // If its the ID characteristic, read the data, and cache against the sender's MAC address
+        Timber.d("nearby - received write request from mac ${device.address} - caching bytes array")
+        writtenIds[device.address] = value
+        // TODO send response if requested (shouldn't be by the protocol)
+        // TODO clear out writtenIds every so often (E.g. if older than a minute)
     }
 
     fun respondToDescriptorWrite(
@@ -64,6 +123,9 @@ class GattWrapper(
         responseNeeded: Boolean,
         requestId: Int
     ) {
+        // af-08 Additional logging
+        Timber.d("Received descriptor write") // just in case below optional causes it not to log
+        Timber.d("Received descriptor write from ${device?.address}")
 
         if (device == null ||
             descriptor == null ||
@@ -74,7 +136,7 @@ class GattWrapper(
                 server?.sendResponse(
                     device,
                     requestId,
-                    BluetoothGatt.GATT_FAILURE,
+                    BluetoothGatt.GATT_SUCCESS, // af-05 sending success but blank value so connection isn't terminated
                     0,
                     byteArrayOf()
                 )
@@ -82,52 +144,75 @@ class GattWrapper(
         }
 
         // Will be setting up a separate job later on
-        if (descriptor.characteristic.isDeviceIdentifier())
-            return
+        if (descriptor.characteristic.isDeviceIdentifier()) {
+            // af-08
+            Timber.d("Device $device characteristic for subscription is BluetoothID - should we skip?")
+            //return
+        }
 
-        Timber.d("Device $device has subscribed to keep alive.")
+        Timber.d("Device $device has subscribed to general keep alive.")
+        // AF af-12 YES - should we just have this job running anyway???
         coroutineScope.launch {
-            Timber.d("Starting notify job")
+            Timber.d("Ensuring notify job is started")
+            if (null == notifyJob) {
+                notifyJob = notifyKeepAliveSubscribersPeriodically(coroutineScope)
+            }
+            Timber.d("LOCK fetching subscribers lock")
             lock.withLock {
-                if (subscribedDevices.isEmpty()) {
-                    notifyJob = notifyKeepAliveSubscribersPeriodically(coroutineScope)
-                }
+                //if (subscribedDevices.isEmpty()) {
+                // af-12 changing logic here, as we should always have this job going
                 subscribedDevices.add(device)
+                Timber.d("LOCK relinquishing subscribers lock")
             }
         }
     }
 
     private fun notifyKeepAliveSubscribersPeriodically(coroutineScope: CoroutineScope) =
         coroutineScope.launch {
+            // af-08 Additional logging
+            Timber.d("Just launched task to notify subscribers")
             while (isActive) {
                 delay(8_000)
-                lock.withLock {
-                    val connectedSubscribers =
-                        bluetoothManager.getConnectedDevices(BluetoothProfile.GATT)
-                            .intersect(subscribedDevices)
+                keepAliveCharacteristic.value = randomValueGenerator()
+                val connected = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT)
 
-                    keepAliveCharacteristic.value = randomValueGenerator()
+                // af-12 minimising lock time here to prevent contention
+                Timber.d("LOCK fetching subscribers lock")
+                lock.withLock {
+                    val connectedSubscribers = connected.intersect(subscribedDevices)
+
+                    Timber.d("Alerting connected subscribers... (if any) count: ${connectedSubscribers.count()}")
+
                     connectedSubscribers.forEach {
                         Timber.d("Sending keepalive notification to ${it.address}")
                         server?.notifyCharacteristicChanged(it, keepAliveCharacteristic, false)
                     }
+                    Timber.d("LOCK relinquishing subscribers lock")
                 }
             }
         }
 
     fun deviceDisconnected(device: BluetoothDevice?) {
         if (device == null) return
+        // af-08 Additional logging
+        Timber.d("Device disconnected from us ${device.address}")
 
         coroutineScope.launch {
+            Timber.d("LOCK fetching subscribers lock")
             lock.withLock {
                 if (subscribedDevices.isEmpty()) {
+                    Timber.d("LOCK relinquishing subscribers lock")
                     return@launch
                 }
                 subscribedDevices.remove(device)
+                // af-12 Removing this so we always fire this job every 8 seconds, to avoid delay on reconnect and resubscribe
+                /*
                 if (subscribedDevices.isEmpty()) {
                     Timber.d("Terminating notify job")
                     notifyJob?.cancel()
                 }
+                 */
+                Timber.d("LOCK relinquishing subscribers lock")
             }
         }
     }

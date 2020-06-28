@@ -90,29 +90,60 @@ class Scanner @Inject constructor(
             while (isActive) {
 
                 Timber.d("scan - Starting")
-                scanDisposable = scan()
+                devices.clear() // TODO af-13 after - do this clearing more intelligently (i.e. if not seen in X minutes)
+                scanDisposable = scan() // launches the scan, asynchronously
 
-                var attempts = 0
-                while (attempts++ < 10 && devices.isEmpty()) {
-                    if (!isActive) {
-                        disposeScanDisposable()
-                        return@launch
-                    }
-                    delay(scanIntervalLength.toLong() * 1_000)
-                }
+                delay(1000) // naive artificial delay for scan
 
-                Timber.d("scan - Stopping")
-                disposeScanDisposable()
+                //Timber.d("scan - Stopping (should have taken 1 second)")
+
 
                 if (!isActive) return@launch
 
                 // Some devices are unable to connect while a scan is running
                 // or just after it finished
-                delay(1_000)
+                // af-13 only do this if we've seen any - makes scanning a tony bit
+                // more aggressive (a good thing)
+                if (devices.count() > 0) {
+                    // af-13 async so no point waiting if gt zero
+                    //Timber.d("1 second scan delay post scan starts...: ")
+                    //delay(1_000) // to allow devices to be ready
+                    //Timber.d("1 second scan delay post scan ends...: ")
 
-                connectToEachDiscoveredDevice(coroutineScope)
+                    Timber.d("scan - Discovered this many devices: " + devices.count())
+                    Timber.d("scan - Calling connectToEachDiscoveredDevice")
+                    connectToEachDiscoveredDevice(coroutineScope)
+                    //delay(7_000) // af-05 to bypass undocumented scan throttle
 
-                devices.clear()
+                    // af-05 - will remove devices in a separate thread before they can be connected to!
+                    // af-05 now we have an 8 seconds delay, added clear back in
+                } else {
+                    Timber.d("scan - no devices found, skipping connect stage")
+                }
+
+
+                // af-13 delay moved to end of activity
+
+                // af-05 the below is superfluous, and just causes scanning to be denied through attempting it too often (< once per 6s)
+                //var attempts = 0
+                /*
+                while (attempts++ < 10 && devices.isEmpty()) {
+                    if (!isActive) {
+                        Timber.d("scan - Stopping in loop")
+                        disposeScanDisposable()
+                        return@launch
+                    }
+                    */
+                // af-10 extra logging around delays to see if that affects entire BLe subsystem on Android
+                Timber.d("scan - interval = " + scanIntervalLength.toLong())
+                Timber.d("Standard interval scan delay starts...: ")
+                delay((scanIntervalLength.toLong() - 1 )* 1_000) // naive delay between scan attempts. Minus the 1 second delay from above
+                Timber.d("Standard interval scan delay ends...: ")
+
+                //}
+                // af-13 dispose of this in our max time (i.e. full 8 second delay)
+                disposeScanDisposable()
+
             }
         }
     }
@@ -123,11 +154,16 @@ class Scanner @Inject constructor(
     }
 
     private fun connectToEachDiscoveredDevice(coroutineScope: CoroutineScope) {
-        devices.distinctBy { it.bleDevice }.forEach { scanResult ->
+        // af-05 changed the below to be unique by macAddress of the device, to bypass any weirdness in comparators
+        devices.distinctBy { it.bleDevice.macAddress }.forEach { scanResult ->
             val macAddress = scanResult.bleDevice.macAddress
+            Timber.d("Evaluating scan result $macAddress")
             val device = scanResult.bleDevice
             val identifier = knownDevices[macAddress]
             val txPowerAdvertised = scanResult.scanRecord.txPowerLevel
+
+            // AF NOT REQUIRED now we're scanning every second we need a sensible delay for connecting per device to prevent over connecting
+            // af-05 - upped scanning to every 8 seconds as it finished in 250ms and is reliable, and there's an undocumented scan limit!
 
             val operation = if (identifier != null) {
                 readOnlyRssi(identifier)
@@ -154,9 +190,11 @@ class Scanner @Inject constructor(
                 }
                 .flatMap {
                     Single.zip(
+                        // TODO validate that doing both of these at the same time doesn't break one or the other
                         it.readCharacteristic(SONAR_IDENTITY_CHARACTERISTIC_UUID),
                         it.readRssi(),
                         BiFunction<ByteArray, Int, Pair<ByteArray, Int>> { characteristicValue, rssi ->
+                            Timber.d("read - ID and $rssi for ${base64Encoder(characteristicValue)}")
                             characteristicValue to rssi
                         }
                     )
@@ -166,6 +204,7 @@ class Scanner @Inject constructor(
     private fun readOnlyRssi(identifier: BluetoothIdentifier): (RxBleConnection) -> Single<Pair<ByteArray, Int>> =
         { connection: RxBleConnection ->
             connection.readRssi().map { rssi ->
+                Timber.d("read - only rssi $rssi for ${base64Encoder(identifier.cryptogram.asBytes())}")
                 identifier.asBytes() to rssi
             }
         }
@@ -217,7 +256,7 @@ class Scanner @Inject constructor(
             )
             .subscribe(
                 {
-                    Timber.d("Scan found = ${it.bleDevice}")
+                    Timber.d("scan - found = ${it.bleDevice.macAddress}")
                     devices.add(it)
                 },
                 ::scanError
@@ -239,6 +278,7 @@ class Scanner @Inject constructor(
         txPowerAdvertised: Int,
         scope: CoroutineScope
     ) {
+        // AF TODO evaluate if the below actually stops discovery by killing the connection too early (i.e. if only one read has occurred)
         connectionDisposable.dispose()
         if (identifierBytes.size != BluetoothIdentifier.SIZE) {
             throw IllegalArgumentException("Identifier has wrong size, must be ${BluetoothIdentifier.SIZE}, was ${identifierBytes.size}")
@@ -258,6 +298,7 @@ class Scanner @Inject constructor(
         connectionDisposable: CompositeDisposable,
         macAddress: String
     ) {
+        // AF should we disconnect, or just re-try the read? - af-10 not ever seeing this happen in logs
         connectionDisposable.dispose()
         Timber.e("failed reading from $macAddress - $e")
         eventEmitter.errorEvent(macAddress, e)
@@ -273,6 +314,7 @@ class Scanner @Inject constructor(
     }
 
     private fun negotiateMTU(connection: RxBleConnection): Single<RxBleConnection> {
+        // AF TODO verify that the below doesn't cause a connection to fail
         // the overhead appears to be 2 bytes
         return connection.requestMtu(2 + BluetoothIdentifier.SIZE)
             .doOnSubscribe { Timber.d("Negotiating MTU started") }

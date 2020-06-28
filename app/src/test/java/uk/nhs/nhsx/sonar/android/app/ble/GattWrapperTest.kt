@@ -89,7 +89,7 @@ class GattWrapperTest {
         every { keepAliveCharacteristic.setValue(capture(slot)) } answers { true }
 
         every { keepAliveDescriptor.characteristic.uuid } returns SONAR_KEEPALIVE_CHARACTERISTIC_UUID
-        every { keepAliveDescriptor.uuid } returns NOTIFY_DESCRIPTOR_UUID
+        every { keepAliveDescriptor.uuid } returns CLIENT_CHARACTERISTIC_CONFIG
         every { bluetoothManager.getConnectedDevices(BluetoothProfile.GATT) } returns listOf(device)
 
         gattWrapper.respondToDescriptorWrite(device, keepAliveDescriptor, false, 75)
@@ -126,7 +126,7 @@ class GattWrapperTest {
     fun `first subscriber kicks off notify job`() {
         val keepAliveDescriptor = mockk<BluetoothGattDescriptor>()
         every { keepAliveDescriptor.characteristic.uuid } returns SONAR_KEEPALIVE_CHARACTERISTIC_UUID
-        every { keepAliveDescriptor.uuid } returns NOTIFY_DESCRIPTOR_UUID
+        every { keepAliveDescriptor.uuid } returns CLIENT_CHARACTERISTIC_CONFIG
 
         gattWrapper.respondToDescriptorWrite(device, keepAliveDescriptor, false, 75)
         assertThat(gattWrapper.notifyJob).isNotNull()
@@ -137,7 +137,7 @@ class GattWrapperTest {
     fun `when the last subscriber disconnects the notify job is stopped`() {
         val keepAliveDescriptor = mockk<BluetoothGattDescriptor>()
         every { keepAliveDescriptor.characteristic.uuid } returns SONAR_KEEPALIVE_CHARACTERISTIC_UUID
-        every { keepAliveDescriptor.uuid } returns NOTIFY_DESCRIPTOR_UUID
+        every { keepAliveDescriptor.uuid } returns CLIENT_CHARACTERISTIC_CONFIG
         val secondDevice = mockk<BluetoothDevice>()
 
         gattWrapper.respondToDescriptorWrite(device, keepAliveDescriptor, false, 75)
@@ -160,7 +160,7 @@ class GattWrapperTest {
     fun `allows notification to be set up for identity characteristic but does not send out values yet`() {
         val notifyDescriptor = mockk<BluetoothGattDescriptor>()
         every { notifyDescriptor.characteristic.uuid } returns SONAR_IDENTITY_CHARACTERISTIC_UUID
-        every { notifyDescriptor.uuid } returns NOTIFY_DESCRIPTOR_UUID
+        every { notifyDescriptor.uuid } returns CLIENT_CHARACTERISTIC_CONFIG
 
         gattWrapper.respondToDescriptorWrite(device, notifyDescriptor, true, 75)
 
@@ -177,7 +177,7 @@ class GattWrapperTest {
 
         gattWrapper.respondToDescriptorWrite(device, unknownDescriptor, true, 75)
 
-        every { unknownDescriptor.uuid } returns NOTIFY_DESCRIPTOR_UUID
+        every { unknownDescriptor.uuid } returns CLIENT_CHARACTERISTIC_CONFIG
         gattWrapper.respondToDescriptorWrite(device, unknownDescriptor, true, 75)
 
         verify(exactly = 2) { server.sendResponse(device, 75, GATT_FAILURE, 0, byteArrayOf()) }

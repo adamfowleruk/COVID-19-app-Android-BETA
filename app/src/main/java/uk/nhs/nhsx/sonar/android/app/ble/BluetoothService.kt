@@ -120,8 +120,10 @@ class BluetoothService : Service(), Delegate {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        Timber.d("BluetoothService onTaskRemoved")
         super.onTaskRemoved(rootIntent)
-        ServiceRestarterBroadcastReceiver.sendBroadcast(this)
+        // af-08 The below stops our scanning routinely during normal operations, so is removed for testing
+        //ServiceRestarterBroadcastReceiver.sendBroadcast(this)
     }
 
     private fun isBluetoothEnabled() =
