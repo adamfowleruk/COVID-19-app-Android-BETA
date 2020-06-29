@@ -4,30 +4,22 @@
 
 package uk.nhs.nhsx.sonar.android.app.ble
 
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattCharacteristic.PERMISSION_READ
-import android.bluetooth.BluetoothGattCharacteristic.PERMISSION_WRITE
-import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_NOTIFY
-import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_READ
-import android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothGattServer
-import android.bluetooth.BluetoothGattServerCallback
-import android.bluetooth.BluetoothGattService
+import android.bluetooth.*
+import android.bluetooth.BluetoothGattCharacteristic.*
 import android.bluetooth.BluetoothGattService.SERVICE_TYPE_PRIMARY
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
 import android.content.Context
+import com.polidea.rxandroidble2.RxBleDevice
 import kotlinx.coroutines.CoroutineScope
 import timber.log.Timber
 import uk.nhs.nhsx.sonar.android.app.crypto.BluetoothIdProvider
 import javax.inject.Inject
 
+
 class GattServer @Inject constructor(
     private val context: Context,
     private val bluetoothManager: BluetoothManager,
-    private val bluetoothIdProvider: BluetoothIdProvider
+    private val bluetoothIdProvider: BluetoothIdProvider,
+    private val scanner: Scanner
 ) {
     private val keepAliveCharacteristic = BluetoothGattCharacteristic(
         SONAR_KEEPALIVE_CHARACTERISTIC_UUID,
@@ -94,7 +86,7 @@ class GattServer @Inject constructor(
                 offset: Int,
                 characteristic: BluetoothGattCharacteristic
             ) {
-                Timber.d("onCharacteristicReadRequest received")
+                Timber.d("onCharacteristicReadRequest received for ${characteristic.uuid}")
                 gattWrapper?.respondToCharacteristicRead(device, requestId, characteristic)
             }
 
@@ -118,7 +110,8 @@ class GattServer @Inject constructor(
                 status: Int,
                 newState: Int
             ) {
-                super.onConnectionStateChange(device, status, newState)
+                // af-14 call moved to the end of the function as per article
+                //super.onConnectionStateChange(device, status, newState)
                 // af-08 Additional logging
                 Timber.d("Connection state change recorded...")
                 Timber.d("Connection state change for ${device?.address} was $status now $newState")
@@ -129,6 +122,22 @@ class GattServer @Inject constructor(
                 if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     gattWrapper?.deviceDisconnected(device)
                 }
+                if (newState == BluetoothProfile.STATE_CONNECTED && null != device) {
+                    Timber.d("TODO Opening reply connection for incoming connected device")
+                    //scanner.connectTo(coroutineScope,device.address,1)
+                    // af-14 this also gets around one way detection with a backgrounded iPhone
+                    /*
+                    device.connectGatt(scanner.connectAndPerformOperation(
+                        device,
+                        device.macAddress,
+                        1,
+                        coroutineScope,
+                        scanner.Read
+                    ), false, this)
+                    //scanner.connectTo(coroutineScope, device., 1) // TODO change this to something from connection, if present
+                    */
+                }
+                super.onConnectionStateChange(device, status, newState)
             }
 
             // AF WHY IS THIS EVER NECESSARY??? We never receive a descriptor write, but perhaps, in future, a characteristic write
@@ -148,6 +157,7 @@ class GattServer @Inject constructor(
 
         server = bluetoothManager.openGattServer(context, callback)
         server?.addService(service)
+
 
         gattWrapper = GattWrapper(
             server,

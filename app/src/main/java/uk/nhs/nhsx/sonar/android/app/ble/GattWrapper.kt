@@ -113,7 +113,10 @@ class GattWrapper(
         // If its the ID characteristic, read the data, and cache against the sender's MAC address
         Timber.d("nearby - received write request from mac ${device.address} - caching bytes array")
         writtenIds[device.address] = value
-        // TODO send response if requested (shouldn't be by the protocol)
+
+        // af-14 MUST SEND RESPONSE FOR iOS
+        server?.sendResponse(device,requestId,BluetoothGatt.GATT_SUCCESS,0,byteArrayOf())
+
         // TODO clear out writtenIds every so often (E.g. if older than a minute)
     }
 
@@ -127,11 +130,13 @@ class GattWrapper(
         Timber.d("Received descriptor write") // just in case below optional causes it not to log
         Timber.d("Received descriptor write from ${device?.address}")
 
+
         if (device == null ||
             descriptor == null ||
             !descriptor.isNotifyDescriptor() ||
-            !(descriptor.characteristic.isKeepAlive() || descriptor.characteristic.isDeviceIdentifier())
+            !(descriptor.characteristic.isKeepAlive())
         ) {
+            Timber.d("Sending empty response to descriptor write")
             if (responseNeeded)
                 server?.sendResponse(
                     device,
@@ -149,6 +154,20 @@ class GattWrapper(
             Timber.d("Device $device characteristic for subscription is BluetoothID - should we skip?")
             //return
         }
+
+
+
+
+
+        // af-15 IMPORTANT NEVER EVER EVER REMOVE THE FOLLOWING LINE - IT WILL CAUSE IOS TO BLOCK UNTIL A RESPONSE OR 30s AND THE CONNECTION DIES
+        // send response
+        Timber.d("Sending response to descriptor write (nearby id descriptor)")
+        server?.sendResponse(device,requestId,BluetoothGatt.GATT_SUCCESS,0, byteArrayOf())
+
+
+
+
+
 
         Timber.d("Device $device has subscribed to general keep alive.")
         // AF af-12 YES - should we just have this job running anyway???

@@ -4,13 +4,10 @@
 
 package uk.nhs.nhsx.sonar.android.app.ble
 
+import android.bluetooth.BluetoothProfile
 import android.os.ParcelUuid
 import android.util.Base64
-import com.polidea.rxandroidble2.LogConstants
-import com.polidea.rxandroidble2.LogOptions
-import com.polidea.rxandroidble2.RxBleClient
-import com.polidea.rxandroidble2.RxBleConnection
-import com.polidea.rxandroidble2.RxBleDevice
+import com.polidea.rxandroidble2.*
 import com.polidea.rxandroidble2.scan.ScanFilter
 import com.polidea.rxandroidble2.scan.ScanResult
 import com.polidea.rxandroidble2.scan.ScanSettings
@@ -19,11 +16,7 @@ import io.reactivex.Single
 import io.reactivex.disposables.CompositeDisposable
 import io.reactivex.disposables.Disposable
 import io.reactivex.functions.BiFunction
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import org.joda.time.DateTime
 import org.joda.time.DateTimeZone
 import timber.log.Timber
@@ -158,36 +151,65 @@ class Scanner @Inject constructor(
         devices.distinctBy { it.bleDevice.macAddress }.forEach { scanResult ->
             val macAddress = scanResult.bleDevice.macAddress
             Timber.d("Evaluating scan result $macAddress")
-            val device = scanResult.bleDevice
-            val identifier = knownDevices[macAddress]
+            //val device = scanResult.bleDevice
+            //val identifier = knownDevices[macAddress]
             val txPowerAdvertised = scanResult.scanRecord.txPowerLevel
 
-            // AF NOT REQUIRED now we're scanning every second we need a sensible delay for connecting per device to prevent over connecting
-            // af-05 - upped scanning to every 8 seconds as it finished in 250ms and is reliable, and there's an undocumented scan limit!
-
-            val operation = if (identifier != null) {
-                readOnlyRssi(identifier)
-            } else {
-                readIdAndRssi()
-            }
-
-            Timber.d("Connecting to $macAddress")
-            connectAndPerformOperation(
-                device,
-                macAddress,
-                txPowerAdvertised,
-                coroutineScope,
-                operation
-            )
+            connectTo(coroutineScope, scanResult.bleDevice, txPowerAdvertised)
         }
+    }
+
+    fun connectTo(coroutineScope: CoroutineScope, macAddress: String, powerSeen: Int) {
+        val device = rxBleClient.getBleDevice(macAddress)
+        connectTo(coroutineScope,device,powerSeen)
+    }
+
+    fun connectTo(coroutineScope: CoroutineScope, device: RxBleDevice, powerSeen: Int) {
+
+        val operation = /*if (identifier != null) {
+            readOnlyRssi(identifier)
+        } else {*/
+            readIdAndRssi()
+        //}
+
+        // verify we're not already connected first!!! It'll kill and restart the connection
+        if (!device.connectionState.equals(BluetoothProfile.STATE_DISCONNECTED)) {
+            Timber.d("TODO FIX THIS NAIVE AVOIDANCE OF CONNECTION SO WE DIRECTLY READ RSSI AND ID INSTEAD")
+            return
+        }
+
+        //af-14 so we can call it from server too if we receive an incoming
+
+        // AF NOT REQUIRED now we're scanning every second we need a sensible delay for connecting per device to prevent over connecting
+        // af-05 - upped scanning to every 8 seconds as it finished in 250ms and is reliable, and there's an undocumented scan limit!
+
+
+        Timber.d("Connecting to $device.macAddress")
+        connectAndPerformOperation(
+            device,
+            device.macAddress,
+            powerSeen,
+            coroutineScope,
+            operation
+        )
     }
 
     private fun readIdAndRssi(): (RxBleConnection) -> Single<Pair<ByteArray, Int>> =
         { connection ->
-            negotiateMTU(connection)
-                .flatMap {
-                    disableRetry(it)
-                }
+            // allow ios to lead on MTU negotiation - af-14 (may need to just set it to 517 like on iOS
+            var initial : Single<RxBleConnection>
+            var minMtu = 517 //2 + BluetoothIdentifier.SIZE
+            Timber.d("MTU currently: ${connection.mtu.toInt()} needs to be $minMtu or higher")
+            if (connection.mtu.toInt() >= minMtu) {
+                initial = disableRetry(connection)
+            } else {
+                initial =
+                    negotiateMTU(connection)
+                        .flatMap {
+                            disableRetry(it)
+                        }
+            }
+            initial
                 .flatMap {
                     Single.zip(
                         // TODO validate that doing both of these at the same time doesn't break one or the other
@@ -209,7 +231,7 @@ class Scanner @Inject constructor(
             }
         }
 
-    private fun connectAndPerformOperation(
+    fun connectAndPerformOperation(
         device: RxBleDevice,
         macAddress: String,
         txPowerAdvertised: Int,
@@ -226,7 +248,8 @@ class Scanner @Inject constructor(
             .doOnSubscribe {
                 compositeDisposable.add(it)
             }
-            .take(1)
+            .take (2000) // af-14 to see if it has any effect - WORKS - PREVENTS CONSTANT DISCONNECT Monday 29 June 09:25
+            //.take(1) // af-14 this single invocation seems to force a disconnect in android afterwards
             .blockingSubscribe(
                 { (identifier, rssi) ->
                     onReadSuccess(
@@ -279,7 +302,8 @@ class Scanner @Inject constructor(
         scope: CoroutineScope
     ) {
         // AF TODO evaluate if the below actually stops discovery by killing the connection too early (i.e. if only one read has occurred)
-        connectionDisposable.dispose()
+        // af-14 removed the below as it seems to also break connections FROM that device - VERIFYING
+        //connectionDisposable.dispose()
         if (identifierBytes.size != BluetoothIdentifier.SIZE) {
             throw IllegalArgumentException("Identifier has wrong size, must be ${BluetoothIdentifier.SIZE}, was ${identifierBytes.size}")
         }
@@ -316,7 +340,8 @@ class Scanner @Inject constructor(
     private fun negotiateMTU(connection: RxBleConnection): Single<RxBleConnection> {
         // AF TODO verify that the below doesn't cause a connection to fail
         // the overhead appears to be 2 bytes
-        return connection.requestMtu(2 + BluetoothIdentifier.SIZE)
+        var minMtu = 517 // af-14 as per iOS not: 2 + BluetoothIdentifier.SIZE
+        return connection.requestMtu(minMtu)
             .doOnSubscribe { Timber.d("Negotiating MTU started") }
             .doOnError { e: Throwable? ->
                 Timber.e("Failed to negotiate MTU: $e")
