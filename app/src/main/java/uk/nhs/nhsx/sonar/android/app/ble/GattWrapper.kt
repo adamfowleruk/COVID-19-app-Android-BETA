@@ -191,7 +191,7 @@ class GattWrapper(
             // af-08 Additional logging
             Timber.d("Just launched task to notify subscribers")
             while (isActive) {
-                delay(8_000)
+                delay(1_000) // af-17 dropped this to one to see the effect when it runs in the BG
                 keepAliveCharacteristic.value = randomValueGenerator()
                 val connected = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT)
 

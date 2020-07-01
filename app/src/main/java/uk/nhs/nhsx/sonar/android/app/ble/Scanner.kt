@@ -130,7 +130,8 @@ class Scanner @Inject constructor(
                 // af-10 extra logging around delays to see if that affects entire BLe subsystem on Android
                 Timber.d("scan - interval = " + scanIntervalLength.toLong())
                 Timber.d("Standard interval scan delay starts...: ")
-                delay((scanIntervalLength.toLong() - 1 )* 1_000) // naive delay between scan attempts. Minus the 1 second delay from above
+                // af-16 test with 1 second delay only -> Stops throttling at 5000 here (throttles at 4000), + 1 second from above
+                delay(/*(scanIntervalLength.toLong() - 1 )*/ 5_000) // naive delay between scan attempts. Minus the 1 second delay from above
                 Timber.d("Standard interval scan delay ends...: ")
 
                 //}
