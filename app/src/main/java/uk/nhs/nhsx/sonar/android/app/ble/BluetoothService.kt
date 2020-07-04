@@ -91,6 +91,9 @@ class BluetoothService : Service(), Delegate {
             }
 
         locationProviderChangedReceiver.register(this)
+
+
+        SonarDiscoveryManager.instance.bluetoothService = this
     }
 
     private val combineStates: BiFunction<RxBleClient.State, Boolean, CombinedStatus> =
@@ -164,6 +167,10 @@ class BluetoothService : Service(), Delegate {
             gattServer.start(gattScope)
             advertise.start()
         }
+    }
+
+    fun ensureGattAdvertisingIsRunning() {
+        gattServer.ensureRunning(gattScope)
     }
 
     override fun stopGattAndAdvertise() {

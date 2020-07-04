@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import uk.nhs.nhsx.sonar.android.app.crypto.BluetoothIdProvider
+import uk.nhs.nhsx.sonar.android.app.crypto.BluetoothIdentifier
 import kotlin.random.Random
 
 class GattWrapper(
@@ -29,6 +30,7 @@ class GattWrapper(
     private val bluetoothManager: BluetoothManager,
     private val bluetoothIdProvider: BluetoothIdProvider,
     private val keepAliveCharacteristic: BluetoothGattCharacteristic,
+    private val scanner: Scanner,
     private val randomValueGenerator: () -> ByteArray = { Random.nextBytes(1) }
 ) {
     var notifyJob: Job? = null
@@ -60,7 +62,7 @@ class GattWrapper(
 
         if (characteristic.isDeviceIdentifier()) {
             if (payloadIsValid) {
-                Timber.d("Was a read of the Bluetooth ID. Returning payload")
+                Timber.d("Was a read of my Bluetooth ID. Returning payload to ${device.address}")
                 server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, payload)
 
                 return
@@ -118,6 +120,13 @@ class GattWrapper(
         server?.sendResponse(device,requestId,BluetoothGatt.GATT_SUCCESS,0,byteArrayOf())
 
         // TODO clear out writtenIds every so often (E.g. if older than a minute)
+
+        // TODO check the written value isn't our own ID, or a recent old one
+
+        // TODO af-18 Log remote written IDs as contacts
+        val identifier = BluetoothIdentifier.fromBytes(value)
+        scanner.storeEvent(identifier,10,coroutineScope,10)
+        // TODO use correct power/rssi settings in the above in future
     }
 
     fun respondToDescriptorWrite(

@@ -30,6 +30,7 @@ class Scanner @Inject constructor(
     private val rxBleClient: RxBleClient,
     private val saveContactWorker: SaveContactWorker,
     private val eventEmitter: BleEventEmitter,
+    private val keepaliveSourceListener: KeepaliveSourceListener,
     private val currentTimestampProvider: () -> DateTime = { DateTime.now(DateTimeZone.UTC) },
     @Named(BluetoothModule.SCAN_INTERVAL_LENGTH)
     private val scanIntervalLength: Int,
@@ -92,6 +93,10 @@ class Scanner @Inject constructor(
 
 
                 if (!isActive) return@launch
+
+                // af-18 sanity check that our own advertising is still running (Android can kill advertising, not this scanning thread)
+                //gattServer.ensureRunning(coroutineScope) // TODO this may flake out after the second use due to sharing scope... test extensively!
+                keepaliveSourceListener.keepalive()
 
                 // Some devices are unable to connect while a scan is running
                 // or just after it finished
@@ -173,11 +178,15 @@ class Scanner @Inject constructor(
             readIdAndRssi()
         //}
 
+        // af-18 DANGER: If iOS connects to us first before we connect, this will always return!
         // verify we're not already connected first!!! It'll kill and restart the connection
-        if (!device.connectionState.equals(BluetoothProfile.STATE_DISCONNECTED)) {
-            Timber.d("TODO FIX THIS NAIVE AVOIDANCE OF CONNECTION SO WE DIRECTLY READ RSSI AND ID INSTEAD")
-            return
-        }
+        // af-18 flawed logic if (!device.connectionState.equals(BluetoothProfile.STATE_DISCONNECTED)) {
+        //    Timber.d("TODO FIX THIS NAIVE AVOIDANCE OF CONNECTION SO WE DIRECTLY READ RSSI AND ID INSTEAD")
+        //    return
+        //}
+
+        // TODO af-18 the above logic is REQUIRED, BUT we need a way to not return but perform action on this connection instead
+        // Requires a change to connection handling logic and a refactor of connectAndPerformOperation
 
         //af-14 so we can call it from server too if we receive an incoming
 
@@ -185,7 +194,7 @@ class Scanner @Inject constructor(
         // af-05 - upped scanning to every 8 seconds as it finished in 250ms and is reliable, and there's an undocumented scan limit!
 
 
-        Timber.d("Connecting to $device.macAddress")
+        Timber.d("Connecting to ${device.macAddress}")
         connectAndPerformOperation(
             device,
             device.macAddress,
@@ -249,8 +258,9 @@ class Scanner @Inject constructor(
             .doOnSubscribe {
                 compositeDisposable.add(it)
             }
-            .take (2000) // af-14 to see if it has any effect - WORKS - PREVENTS CONSTANT DISCONNECT Monday 29 June 09:25
+            .take (20000) // af-14 to see if it has any effect - WORKS - PREVENTS CONSTANT DISCONNECT Monday 29 June 09:25
             //.take(1) // af-14 this single invocation seems to force a disconnect in android afterwards
+            // af-19 Changed to 200000 from 2000 as this is under 2 hours. We only need to get to 24 hours (rotation in testing)
             .blockingSubscribe(
                 { (identifier, rssi) ->
                     onReadSuccess(
@@ -357,7 +367,7 @@ class Scanner @Inject constructor(
         Timber.e("Scan failed with: $e")
     }
 
-    private fun storeEvent(
+    fun storeEvent(
         identifier: BluetoothIdentifier,
         rssi: Int,
         scope: CoroutineScope,

@@ -4,14 +4,17 @@
 
 package uk.nhs.nhsx.sonar.android.app.ble
 
+import android.app.Activity
 import android.bluetooth.*
 import android.bluetooth.BluetoothGattCharacteristic.*
 import android.bluetooth.BluetoothGattService.SERVICE_TYPE_PRIMARY
 import android.content.Context
+import android.content.Intent
 import com.polidea.rxandroidble2.RxBleDevice
 import kotlinx.coroutines.CoroutineScope
 import timber.log.Timber
 import uk.nhs.nhsx.sonar.android.app.crypto.BluetoothIdProvider
+import uk.nhs.nhsx.sonar.android.app.onboarding.PermissionActivity
 import javax.inject.Inject
 
 
@@ -76,6 +79,20 @@ class GattServer @Inject constructor(
 
     private var server: BluetoothGattServer? = null
     private var gattWrapper: GattWrapper? = null
+
+    fun ensureRunning(coroutineScope: CoroutineScope) {
+        // af-18
+        if (bluetoothManager.adapter.state == BluetoothAdapter.STATE_OFF) {
+            Timber.d("ALERT ALERT ADAPTER IS IN OFF STATE AWOOOOGAAAAAAA!!!")
+            bluetoothManager.adapter.enable() // requires admin privileges - naughty... try it though as we should already have this permission if running
+            /*
+            startActivityForResult(
+                Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                PermissionActivity.REQUEST_ENABLE_BT
+            )*/
+            //start(coroutineScope) - note: according to bluetooth spec this should restart in the previous state
+        }
+    }
 
     fun start(coroutineScope: CoroutineScope) {
         Timber.d("Bluetooth Gatt start")
@@ -164,7 +181,8 @@ class GattServer @Inject constructor(
             coroutineScope,
             bluetoothManager,
             bluetoothIdProvider,
-            keepAliveCharacteristic
+            keepAliveCharacteristic,
+            scanner
         )
     }
 
