@@ -80,16 +80,19 @@ class Scanner @Inject constructor(
             .build()
         RxBleClient.updateLogOptions(logOptions)
 
+        Timber.d("STATE start called on scanner. Starting scan job.")
+
         scanJob = coroutineScope.launch {
             while (isActive) {
 
                 Timber.d("scan - Starting")
                 devices.clear() // TODO af-13 after - do this clearing more intelligently (i.e. if not seen in X minutes)
                 scanDisposable = scan() // launches the scan, asynchronously
+                Timber.d("scan - immediately post scan. 1s pause...")
 
                 delay(1000) // naive artificial delay for scan
 
-                //Timber.d("scan - Stopping (should have taken 1 second)")
+                Timber.d("scan - post delay. Should have taken 1 second")
 
 
                 if (!isActive) return@launch
@@ -148,6 +151,7 @@ class Scanner @Inject constructor(
     }
 
     fun stop() {
+        Timber.d("STATE stop called on scanner. Cancelling scan job.")
         disposeScanDisposable()
         scanJob?.cancel()
     }
@@ -226,7 +230,7 @@ class Scanner @Inject constructor(
                         it.readCharacteristic(SONAR_IDENTITY_CHARACTERISTIC_UUID),
                         it.readRssi(),
                         BiFunction<ByteArray, Int, Pair<ByteArray, Int>> { characteristicValue, rssi ->
-                            Timber.d("read - ID and $rssi for ${base64Encoder(characteristicValue)}")
+                            Timber.d("read - ID and $rssi for ${base64Encoder(characteristicValue)}}")
                             characteristicValue to rssi
                         }
                     )
@@ -258,7 +262,8 @@ class Scanner @Inject constructor(
             .doOnSubscribe {
                 compositeDisposable.add(it)
             }
-            .take (20000) // af-14 to see if it has any effect - WORKS - PREVENTS CONSTANT DISCONNECT Monday 29 June 09:25
+            // af-33 reduce this to every X minutes, same as iOS maxConnected setting in terms of time (was 20000)
+            .take (1) // af-14 to see if it has any effect - WORKS - PREVENTS CONSTANT DISCONNECT Monday 29 June 09:25
             //.take(1) // af-14 this single invocation seems to force a disconnect in android afterwards
             // af-19 Changed to 200000 from 2000 as this is under 2 hours. We only need to get to 24 hours (rotation in testing)
             .blockingSubscribe(
@@ -274,6 +279,9 @@ class Scanner @Inject constructor(
                 },
                 { e -> onReadError(e, compositeDisposable, macAddress) }
             )
+        // af-35 WARNING THE ABOVE IS ONLY CAUSING AN ID AND RSSI EVERY 40 SECONDS with take: 5
+        // WITH IT SET TO 1 ITS EVERY 10-12 SECONDS
+        // TODO stop any blocking IO on BLE and read RSSI and ID on a per-connection basis
     }
 
     private fun disposeScanDisposable() {
@@ -312,6 +320,9 @@ class Scanner @Inject constructor(
         txPowerAdvertised: Int,
         scope: CoroutineScope
     ) {
+        // af-33 printing out connection state for logging purposes
+        Timber.d("CONN performing timed functions on connection at mac ${macAddress}")
+
         // AF TODO evaluate if the below actually stops discovery by killing the connection too early (i.e. if only one read has occurred)
         // af-14 removed the below as it seems to also break connections FROM that device - VERIFYING
         //connectionDisposable.dispose()

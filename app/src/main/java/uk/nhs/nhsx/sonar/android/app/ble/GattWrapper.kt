@@ -46,6 +46,7 @@ class GattWrapper(
 
     // af-13 - Write characteristic support
     private val writtenIds = HashMap<String,ByteArray>() // MacAddress String to Byte Array
+    // TODO af-35 nly send the above to a remote if ByteArray value unique (mac address can rotate!)
 
     fun respondToCharacteristicRead(
         device: BluetoothDevice,
@@ -85,17 +86,30 @@ class GattWrapper(
             Timber.d("nearby - characteristic being read")
             var requestorMac = device.address
             Timber.d("nearby - Returning a list of nearby devices by their most recent data shared to $requestorMac")
-            var writtenAny = false
-            for (key in writtenIds.keys) {
-                if (!requestorMac.equals(key)) {
-                    // send a response
-                    Timber.d("nearby - Found a recent key that isn't the requestor, so sending: $key")
-                    server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, writtenIds[key])
-                    writtenAny = true
-                    break // af-13 TODO only ever send one for now - change in future
+            // af-35 send ONE response, and send the first 6 bytes (48 bits, 8 Base64 characters - lowest common denominator)
+            if (writtenIds.size > 0) {
+                var toSend = ByteArray (6 * writtenIds.size)
+                var idx = 0
+                for (key in writtenIds.keys) {
+                    /*
+                    if (!requestorMac.equals(key)) {
+                        // send a response
+                        Timber.d("nearby - Found a recent key that isn't the requestor, so sending: $key")
+                        server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, writtenIds[key])
+                        writtenAny = true
+                        break // af-13 TODO only ever send one for now - change in future
+                    }*/
+                    var i = 0;
+                    var thisba = writtenIds[key]
+                    while (i < 6) {
+                        toSend.set(idx, thisba!!.get(i+2)) // do NOT do the first 2 bytes (country code)
+                        i++
+                        idx++
+                    }
                 }
-            }
-            if (!writtenAny) {
+                Timber.d("nearby - sending first few chars of each key in set: ${toSend}")
+                server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, toSend)
+            } else {
                 Timber.d("Not seen any other nearby IDs. Sending successful blank response")
                 server?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, byteArrayOf())
             }
