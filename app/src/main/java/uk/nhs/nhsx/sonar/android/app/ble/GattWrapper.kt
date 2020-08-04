@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.net.MacAddress
+import android.util.Base64
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -127,7 +128,7 @@ class GattWrapper(
         }
         // TODO don't assume it's the ID Char that is being written
         // If its the ID characteristic, read the data, and cache against the sender's MAC address
-        Timber.d("nearby - received write request from mac ${device.address} - caching bytes array")
+        Timber.d("nearby - received write request from mac ${device.address} - caching bytes array with value: ${Base64.encodeToString(value, Base64.DEFAULT)}")
         writtenIds[device.address] = value
 
         // af-14 MUST SEND RESPONSE FOR iOS

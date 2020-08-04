@@ -230,7 +230,7 @@ class Scanner @Inject constructor(
                         it.readCharacteristic(SONAR_IDENTITY_CHARACTERISTIC_UUID),
                         it.readRssi(),
                         BiFunction<ByteArray, Int, Pair<ByteArray, Int>> { characteristicValue, rssi ->
-                            Timber.d("read - ID and $rssi for ${base64Encoder(characteristicValue)}}")
+                            Timber.d("read - ID and $rssi for ${base64Encoder(characteristicValue)}")
                             characteristicValue to rssi
                         }
                     )
@@ -332,9 +332,7 @@ class Scanner @Inject constructor(
         val identifier = BluetoothIdentifier.fromBytes(identifierBytes)
         updateKnownDevices(identifier, macAddress)
         Timber.d(
-            "seen MAC $macAddress as ${base64Encoder(identifier.cryptogram.asBytes())
-                .drop(2)
-                .take(12)}"
+            "seen MAC $macAddress as ${base64Encoder(identifierBytes)}" // af-40 DO NOT REMOVE BYTES ***AFTER*** CONVERSION!!!!! Gives a rubbish address. This is now consistent with the other logging in android (i.e. includes country code)
         )
         storeEvent(identifier, rssi, scope, txPowerAdvertised)
     }
@@ -360,7 +358,7 @@ class Scanner @Inject constructor(
     }
 
     private fun negotiateMTU(connection: RxBleConnection): Single<RxBleConnection> {
-        // AF TODO verify that the below doesn't cause a connection to fail
+        // AF af-40 PROVEN verify that the below doesn't cause a connection to fail
         // the overhead appears to be 2 bytes
         var minMtu = 517 // af-14 as per iOS not: 2 + BluetoothIdentifier.SIZE
         return connection.requestMtu(minMtu)
